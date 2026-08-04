@@ -1,0 +1,109 @@
+Screen {
+    background: $surface;
+    color: $text;
+}
+
+Header {
+    background: $panel;
+    color: $text;
+}
+
+Footer {
+    background: $panel;
+    color: $text-muted;
+}
+
+TabbedContent {
+    height: 1fr;
+}
+
+TabPane {
+    padding: 1 2;
+}
+
+.section-title {
+    color: $text;
+    text-style: bold;
+    margin: 0 0 1 0;
+}
+
+.subsection {
+    color: $primary;
+    text-style: bold;
+    margin: 1 0 1 0;
+}
+
+.muted {
+    color: $text-muted;
+}
+
+.status {
+    height: auto;
+    min-height: 2;
+    padding: 1;
+    border: round $primary;
+    margin: 1 0;
+}
+
+#url-input {
+    height: 8;
+    border: tall $primary;
+    margin: 1 0;
+}
+
+#queue-table {
+    height: 1fr;
+    border: round $primary;
+}
+
+#retry-button {
+    margin-top: 1;
+}
+
+.form-row {
+    height: auto;
+    min-height: 3;
+    margin: 0 0 1 0;
+}
+
+.form-label {
+    width: 24;
+    padding: 1 1 0 0;
+    color: $text-muted;
+}
+
+.form-control {
+    width: 1fr;
+}
+
+#extra-args {
+    height: 8;
+    border: tall $primary;
+}
+
+.button-row {
+    height: auto;
+    margin: 1 0;
+}
+
+Button {
+    margin: 0 1 0 0;
+}
+
+#dependency-dialog {
+    width: 70;
+    height: auto;
+    max-height: 80%;
+    padding: 2;
+    border: round $primary;
+    background: $panel;
+}
+
+DependencyDialog {
+    align: center middle;
+    background: $background;
+}
+
+#dependency-dialog .button-row {
+    margin-top: 2;
+}
