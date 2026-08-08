@@ -82,9 +82,26 @@ jobs:
         run: |
           $installDir = Join-Path $env:RUNNER_TEMP "dlp-installed"
           $installer = (Resolve-Path .\dist\dlp-windows-x64-setup.exe).Path
-          & $installer /VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/DIR=$installDir"
-          & (Join-Path $installDir "dlp.exe") --version
-          python packaging/smoke_frozen.py (Join-Path $installDir "dlp.exe")
+          $installLog = Join-Path $env:RUNNER_TEMP "dlp-install.log"
+          $installResult = Start-Process -FilePath $installer -ArgumentList @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/LOG=$installLog",
+            "/DIR=$installDir"
+          ) -Wait -PassThru
+          if ($installResult.ExitCode -ne 0) {
+            if (Test-Path $installLog) { Get-Content $installLog }
+            throw "Installer exited with code $($installResult.ExitCode)"
+          }
+          $installedBinary = Join-Path $installDir "dlp.exe"
+          if (-not (Test-Path $installedBinary)) {
+            if (Test-Path $installLog) { Get-Content $installLog }
+            Get-ChildItem (Split-Path $installDir) -Force | Format-Table -AutoSize | Out-String | Write-Host
+            throw "Installer did not place dlp.exe in $installDir"
+          }
+          & $installedBinary --version
+          python packaging/smoke_frozen.py $installedBinary
           $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
           $normalizedInstall = $installDir.TrimEnd("\")
           if (-not (($userPath -split ";") | Where-Object { $_.TrimEnd("\") -ieq $normalizedInstall })) {
