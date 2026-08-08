@@ -19,3 +19,20 @@ def test_read_batch_file_uses_utf8(tmp_path: Path) -> None:
 def test_normalize_urls_requires_a_value() -> None:
     with pytest.raises(ValueError, match="at least one URL"):
         normalize_urls(["", "  "])
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "file:///private/secret.txt",
+        "https://example.com/has whitespace",
+        "https://example.com/\x1b[31mred",
+        "https://example.com",
+    ],
+)
+def test_normalize_urls_rejects_unsafe_input_except_valid_url(value: str) -> None:
+    if value == "https://example.com":
+        assert normalize_urls([value]) == [value]
+    else:
+        with pytest.raises(ValueError):
+            normalize_urls([value])

@@ -19,7 +19,8 @@ fi
 export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 VERSION=$($PYTHON -c 'from dlp import __version__; print(__version__)')
 
-rm -rf build/dlp dist/dlp dist/dlp-macos-arm64.pkg
+rm -rf build/dlp build/licenses dist/dlp dist/dlp-macos-arm64.pkg
+$PYTHON packaging/collect_licenses.py build/licenses
 "$PYTHON" -m PyInstaller \
     --clean \
     --noconfirm \
@@ -29,6 +30,7 @@ rm -rf build/dlp dist/dlp dist/dlp-macos-arm64.pkg
     --paths src \
     --add-data "src/dlp/ui/styles.tcss:dlp/ui" \
     --add-data "THIRD_PARTY_NOTICES.md:." \
+    --add-data "build/licenses:licenses" \
     --collect-all textual \
     --collect-all yt_dlp \
     --collect-all yt_dlp_ejs \

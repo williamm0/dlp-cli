@@ -17,7 +17,7 @@ from .config import ConfigError, SettingsRepository, config_path, default_output
 from .dependencies import DependencyManager, DependencyStatus
 from .diagnostics import sanitize_message, sanitize_url
 from .engine import DiagnosticLogger, DownloadEngine
-from .formatting import event_summary
+from .formatting import event_summary, format_bytes
 from .history import HistoryRepository, ProfileRepository
 from .models import BatchResult, DownloadRequest, JobState, ProgressEvent, ProgressPhase, Settings
 from .options import OptionValidationError, compile_ydl_options, split_extra_args
@@ -53,6 +53,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     info.add_argument("url", help="URL supported by yt-dlp")
 
+    formats = subparsers.add_parser("formats", help="list formats available for a URL")
+    _add_settings_arguments(formats, include_download_controls=False)
+    formats.add_argument("url", help="URL supported by yt-dlp")
+
     settings = subparsers.add_parser("settings", help="open or inspect saved settings")
     settings.add_argument(
         "--show", action="store_true", help="print settings instead of opening the TUI"
@@ -74,15 +78,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     profile = subparsers.add_parser("profile", help="manage named settings profiles")
     profile_subparsers = profile.add_subparsers(dest="profile_command")
-    profile_subparsers.add_parser("list", help="list saved profiles")
+    profile_list = profile_subparsers.add_parser("list", help="list saved profiles")
+    profile_list.add_argument("--json", action="store_true")
     profile_show = profile_subparsers.add_parser("show", help="show a profile")
     profile_show.add_argument("name")
     profile_show.add_argument("--json", action="store_true")
     profile_save = profile_subparsers.add_parser("save", help="save current settings as a profile")
     profile_save.add_argument("name")
+    profile_save.add_argument("--json", action="store_true")
     profile_delete = profile_subparsers.add_parser("delete", help="delete a profile")
     profile_delete.add_argument("name")
     profile_delete.add_argument("--yes", action="store_true", help="confirm deletion")
+    profile_delete.add_argument("--json", action="store_true")
 
     history = subparsers.add_parser("history", help="list or clear recent jobs")
     history.add_argument("--limit", type=_positive_or_zero, default=25)
@@ -97,6 +104,10 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--json", action="store_true", help="print machine-readable results")
     doctor.add_argument("--profile", help="check dependencies for a named profile")
     doctor.add_argument(
+        "--url",
+        help="check URL-specific dependencies (defaults to a full YouTube profile)",
+    )
+    doctor.add_argument(
         "--ui-check",
         action="store_true",
         help="verify that the interactive UI imports, without starting it",
@@ -109,16 +120,25 @@ def _add_settings_arguments(
 ) -> None:
     parser.add_argument("--profile", help="load a named settings profile")
     parser.add_argument("--output", "-o", dest="output_directory", type=Path)
+    parser.add_argument("--filename-template")
     parser.add_argument("--format", dest="format_selector", help="yt-dlp format selector")
     if include_download_controls:
         parser.add_argument("--audio-only", action="store_true")
         parser.add_argument("--audio-format", default=None)
         parser.add_argument("--audio-quality", default=None)
+        parser.add_argument("--merge-format", dest="merge_output_format")
+        parser.add_argument("--download-archive", type=Path)
+        parser.add_argument("--write-info-json", action="store_true")
+        parser.add_argument("--write-description", action="store_true")
+        parser.add_argument("--write-comments", action="store_true")
+        parser.add_argument("--concurrent-fragments", type=_positive_int)
+        parser.add_argument("--fragment-retries", type=_nonnegative_int)
         parser.add_argument("--subtitles", choices=("off", "manual", "auto"))
         parser.add_argument("--subtitle-langs", default=None, help="comma-separated language codes")
         parser.add_argument("--playlist", choices=("all", "single"))
         parser.add_argument("--overwrite", choices=("skip", "overwrite"))
         parser.add_argument("--retries", type=_nonnegative_int)
+        parser.add_argument("--no-resume", action="store_true")
         parser.add_argument("--rate-limit")
         parser.add_argument("--socket-timeout", type=_positive_int)
         parser.add_argument("--proxy")
@@ -145,6 +165,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_batch(args)
         if args.command == "info":
             return _run_info(args)
+        if args.command == "formats":
+            return _run_formats(args)
         if args.command == "settings":
             return _run_settings(args)
         if args.command == "config":
@@ -213,8 +235,9 @@ def _run_requests(urls: list[str], args: argparse.Namespace) -> int:
 
 def _run_info(args: argparse.Namespace) -> int:
     settings, _profile_name = _settings_for_args(args)
+    url = normalize_urls([args.url])[0]
     info = DownloadEngine().extract_info(
-        args.url,
+        url,
         settings,
         flat_playlist=args.flat_playlist,
     )
@@ -228,6 +251,45 @@ def _run_info(args: argparse.Namespace) -> int:
         print(f"URL: {info.url}")
         if info.is_playlist:
             print(f"Playlist items: {info.item_count if info.item_count is not None else '-'}")
+    return EXIT_OK
+
+
+def _run_formats(args: argparse.Namespace) -> int:
+    settings, _profile_name = _settings_for_args(args)
+    url = normalize_urls([args.url])[0]
+    formats = DownloadEngine().list_formats(url, settings)
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "url": sanitize_url(url),
+                    "formats": [format_info.to_mapping() for format_info in formats],
+                },
+                sort_keys=True,
+            )
+        )
+        return EXIT_OK
+    if not formats:
+        print("No formats reported")
+        return EXIT_OK
+    print("ID\tEXT\tRESOLUTION\tFPS\tVIDEO\tAUDIO\tSIZE\tNOTE")
+    for format_info in formats:
+        size = format_bytes(format_info.filesize)
+        fps = f"{format_info.fps:g}" if format_info.fps is not None else "-"
+        print(
+            "\t".join(
+                (
+                    format_info.format_id,
+                    format_info.ext or "-",
+                    format_info.resolution or "-",
+                    fps,
+                    format_info.video_codec or "-",
+                    format_info.audio_codec or "-",
+                    size,
+                    format_info.note or "-",
+                )
+            )
+        )
     return EXIT_OK
 
 
@@ -247,6 +309,11 @@ def _run_dry_run(requests: list[DownloadRequest], *, json_mode: bool) -> int:
                 "url": sanitize_url(request.url),
                 "format": request.settings.format_selector,
                 "output_directory": str(request.settings.output_directory),
+                "download_archive": (
+                    str(request.settings.download_archive)
+                    if request.settings.download_archive
+                    else None
+                ),
                 "missing_dependencies": missing,
             }
         )
@@ -273,9 +340,14 @@ def _settings_for_args(args: argparse.Namespace) -> tuple[Settings, str | None]:
     overrides: dict[str, Any] = {}
     for arg_name, setting_name in (
         ("output_directory", "output_directory"),
+        ("filename_template", "filename_template"),
         ("format_selector", "format_selector"),
+        ("merge_output_format", "merge_output_format"),
+        ("download_archive", "download_archive"),
         ("audio_format", "audio_format"),
         ("audio_quality", "audio_quality"),
+        ("concurrent_fragments", "concurrent_fragments"),
+        ("fragment_retries", "fragment_retries"),
         ("subtitles", "subtitles"),
         ("playlist", "playlist_mode"),
         ("overwrite", "overwrite"),
@@ -296,6 +368,15 @@ def _settings_for_args(args: argparse.Namespace) -> tuple[Settings, str | None]:
         overrides["quality_mode"] = "custom"
     if getattr(args, "audio_only", False):
         overrides["audio_only"] = True
+    for flag, setting_name in (
+        ("write_info_json", "write_info_json"),
+        ("write_description", "write_description"),
+        ("write_comments", "write_comments"),
+    ):
+        if getattr(args, flag, False):
+            overrides[setting_name] = True
+    if getattr(args, "no_resume", False):
+        overrides["resume_partial_files"] = False
     if getattr(args, "subtitle_langs", None) is not None:
         overrides["subtitle_languages"] = [
             item.strip() for item in args.subtitle_langs.split(",") if item.strip()
@@ -367,7 +448,9 @@ def _run_profile(args: argparse.Namespace) -> int:
     command = args.profile_command or "list"
     if command == "list":
         names = repository.names()
-        if args.profile_command is None or not names:
+        if getattr(args, "json", False):
+            print(json.dumps({"profiles": names}, sort_keys=True))
+        elif args.profile_command is None or not names:
             print("\n".join(names) or "No saved profiles")
         else:
             print("\n".join(names))
@@ -376,13 +459,19 @@ def _run_profile(args: argparse.Namespace) -> int:
         return _print_settings(repository.load(args.name), args.json)
     if command == "save":
         repository.save(args.name, SettingsRepository().load_or_default())
-        print(f"Saved profile '{args.name}'")
+        if args.json:
+            print(json.dumps({"saved": True, "name": args.name}, sort_keys=True))
+        else:
+            print(f"Saved profile '{args.name}'")
         return EXIT_OK
     if command == "delete":
         if not args.yes:
             raise ValueError("profile delete requires --yes")
         repository.delete(args.name)
-        print(f"Deleted profile '{args.name}'")
+        if args.json:
+            print(json.dumps({"deleted": True, "name": args.name}, sort_keys=True))
+        else:
+            print(f"Deleted profile '{args.name}'")
         return EXIT_OK
     return EXIT_INVALID
 
@@ -427,9 +516,9 @@ def _run_doctor(args: argparse.Namespace) -> int:
     else:
         settings = SettingsRepository().load_or_default()
     manager = DependencyManager()
+    target_url = normalize_urls([args.url or "https://www.youtube.com/"])[0]
     requirements = {
-        status.name
-        for status in manager.check_for_request("https://www.youtube.com/", settings)
+        status.name for status in manager.check_for_request(target_url, settings)
     }
     statuses = sorted(
         manager.check(requirements, settings), key=lambda item: item.name.value
@@ -438,9 +527,13 @@ def _run_doctor(args: argparse.Namespace) -> int:
         print(
             json.dumps(
                 {
+                    "url": sanitize_url(target_url),
                     "dependencies": [_dependency_mapping(status) for status in statuses],
                     "install_requested": bool(args.install),
                     "install_performed": False,
+                    "install_skipped": "json mode does not invoke package managers"
+                    if args.install
+                    else None,
                 },
                 sort_keys=True,
             )
@@ -554,6 +647,8 @@ def _batch_mapping(result: BatchResult) -> dict[str, Any]:
                 "state": item.state.value,
                 "output_path": item.output_path,
                 "error": sanitize_message(item.error or "") or None,
+                "diagnostics": [sanitize_message(message) for message in item.diagnostics],
+                "missing_dependencies": list(item.missing_dependencies),
             }
             for item in result.items
         ],
@@ -569,6 +664,7 @@ def _dependency_mapping(status: DependencyStatus) -> dict[str, Any]:
         "version": status.version,
         "reason": status.reason,
         "bundled": status.bundled,
+        "install_command": list(status.install_command),
         "manual_command": status.manual_command,
     }
 

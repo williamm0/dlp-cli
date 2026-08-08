@@ -64,12 +64,15 @@ def required_dependencies(request_url: str, settings: Settings) -> set[Dependenc
     requirements = {
         DependencyName.PYTHON,
         DependencyName.YTDLP,
-        DependencyName.YTDLP_EJS,
     }
+    # yt-dlp-ejs is an extractor-specific add-on. Non-YouTube sites should
+    # not be blocked by an unavailable YouTube challenge-solving package.
+    if is_youtube_url(request_url):
+        requirements.add(DependencyName.YTDLP_EJS)
+        if settings.js_runtime != "auto":
+            requirements.add(DependencyName.DENO)
     if _needs_media_tools(settings):
         requirements.update({DependencyName.FFMPEG, DependencyName.FFPROBE})
-    if is_youtube_url(request_url) and settings.js_runtime != "auto":
-        requirements.add(DependencyName.DENO)
     if settings.external_downloader == "aria2c":
         requirements.add(DependencyName.ARIA2C)
     return requirements
@@ -125,7 +128,16 @@ class DependencyManager:
                 f"No supported package manager was found for {name.value}",
             )
 
-        completed = self._runner(command, check=False, capture_output=True, text=True)
+        try:
+            completed = self._runner(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return InstallResult(name, InstallState.FAILED, str(exc), command)
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout or "installation failed").strip()
             return InstallResult(name, InstallState.FAILED, detail, command)
@@ -161,11 +173,15 @@ class DependencyManager:
             if configured:
                 path = str(configured)
                 available = configured.is_file()
+                # A user-configured path is intentionally not executed during
+                # preflight. The actual yt-dlp job will use it if selected,
+                # but doctor/dry-run must not turn a config file into code.
+                version = None
             else:
                 path = shutil.which(name.value)
                 available = path is not None
+                version = _executable_version(path) if path else None
             reason = _external_reason(name)
-            version = _executable_version(path) if path else None
 
         install_command, manual_command = self._commands_for(name)
         return DependencyStatus(
@@ -246,7 +262,14 @@ def _configured_path(name: DependencyName, settings: Settings | None) -> Path | 
     if name == DependencyName.FFMPEG:
         return settings.ffmpeg_path
     if name == DependencyName.FFPROBE:
-        return settings.ffprobe_path
+        if settings.ffprobe_path:
+            return settings.ffprobe_path
+        if settings.ffmpeg_path:
+            sibling = settings.ffmpeg_path.with_name(
+                "ffprobe.exe" if platform.system() == "Windows" else "ffprobe"
+            )
+            if sibling.exists():
+                return sibling
     return None
 
 

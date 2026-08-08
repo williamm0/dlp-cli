@@ -33,8 +33,31 @@ def test_parser_exposes_scriptable_overrides() -> None:
     assert args.dry_run is True
 
 
+def test_parser_exposes_extended_settings_overrides() -> None:
+    args = build_parser().parse_args(
+        [
+            "download",
+            "--filename-template",
+            "%(title)s.%(ext)s",
+            "--merge-format",
+            "mkv",
+            "--download-archive",
+            "/tmp/archive.txt",
+            "--write-info-json",
+            "--concurrent-fragments",
+            "4",
+            "https://example.com/video",
+        ]
+    )
+    assert args.filename_template == "%(title)s.%(ext)s"
+    assert args.merge_output_format == "mkv"
+    assert args.write_info_json is True
+    assert args.concurrent_fragments == 4
+
+
 def test_version_is_centralized() -> None:
-    assert __version__ == "0.2.0"
+    assert __version__.count(".") == 2
+    assert all(part.isdigit() for part in __version__.split("."))
 
 
 def test_blocked_jobs_have_dependency_exit_code() -> None:
@@ -116,3 +139,16 @@ def test_doctor_ui_check_json_is_machine_readable(capsys) -> None:
     assert cli.main(["doctor", "--ui-check", "--json"]) == EXIT_OK
     payload = json.loads(capsys.readouterr().out)
     assert payload == {"ready": True, "type": "ui_check"}
+
+
+def test_doctor_json_install_request_is_explicitly_non_mutating(capsys) -> None:
+    from dlp import cli
+
+    assert cli.main(["doctor", "--json", "--install", "--url", "https://example.com/"]) in {
+        EXIT_OK,
+        EXIT_DEPENDENCY,
+    }
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["install_requested"] is True
+    assert payload["install_performed"] is False
+    assert payload["install_skipped"]

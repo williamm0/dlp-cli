@@ -10,6 +10,7 @@ from .diagnostics import sanitize_exception, sanitize_message
 from .models import (
     DownloadRequest,
     DownloadResult,
+    FormatInfo,
     JobState,
     MediaInfo,
     ProgressEvent,
@@ -168,7 +169,7 @@ class DownloadEngine:
                 diagnostics=tuple(logger.messages),
                 title=current_title,
             )
-        except BaseException as exc:
+        except Exception as exc:
             if _is_canceled(exc, cancel_event):
                 message = "Canceled"
                 emit(_event(request, ProgressPhase.CANCELED, message, JobState.CANCELED))
@@ -234,7 +235,7 @@ class DownloadEngine:
                 options.pop("noplaylist", None)
             with ytdlp_factory(options) as ydl:
                 raw = ydl.extract_info(url, download=False)
-        except BaseException as exc:
+        except Exception as exc:
             raise RuntimeError(sanitize_exception(exc)) from exc
 
         if not isinstance(raw, dict):
@@ -256,6 +257,52 @@ class DownloadEngine:
             is_playlist=bool(raw.get("_type") == "playlist" or entries is not None),
             item_count=_int_or_none(item_count),
         )
+
+    def list_formats(
+        self,
+        url: str,
+        settings: Settings | None = None,
+    ) -> list[FormatInfo]:
+        """Return a sanitized format inventory without downloading media."""
+
+        active_settings = settings or Settings()
+        logger = DiagnosticLogger()
+        try:
+            ytdlp_factory = self._ytdlp_factory
+            if ytdlp_factory is None:
+                import yt_dlp
+
+                ytdlp_factory = yt_dlp.YoutubeDL
+            options = compile_ydl_options(active_settings, lambda _data: None, logger)
+            options["skip_download"] = True
+            with ytdlp_factory(options) as ydl:
+                raw = ydl.extract_info(url, download=False)
+        except Exception as exc:
+            raise RuntimeError(sanitize_exception(exc)) from exc
+
+        if not isinstance(raw, dict):
+            raise RuntimeError("yt-dlp returned no metadata")
+        values = raw.get("formats")
+        if not isinstance(values, (list, tuple)):
+            return []
+        formats: list[FormatInfo] = []
+        for value in values:
+            if not isinstance(value, dict) or not value.get("format_id"):
+                continue
+            formats.append(
+                FormatInfo(
+                    format_id=_safe_text(value.get("format_id")) or "?",
+                    ext=_safe_text(value.get("ext")),
+                    resolution=_safe_text(value.get("resolution")),
+                    fps=_float_or_none(value.get("fps")),
+                    filesize=_int_or_none(value.get("filesize") or value.get("filesize_approx")),
+                    tbr=_float_or_none(value.get("tbr")),
+                    video_codec=_safe_text(value.get("vcodec")),
+                    audio_codec=_safe_text(value.get("acodec")),
+                    note=_safe_text(value.get("format_note")),
+                )
+            )
+        return formats
 
 
 def _event(

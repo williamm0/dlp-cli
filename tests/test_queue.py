@@ -68,3 +68,38 @@ def test_queue_reports_cancellation_before_start() -> None:
     assert result.items[0].state == JobState.CANCELED
     assert events[0].phase == ProgressPhase.CANCELED
     assert engine.urls == []
+
+
+def test_queue_installs_after_consent_and_rechecks_dependencies() -> None:
+    status = DependencyStatus(
+        DependencyName.FFMPEG,
+        available=False,
+        required=True,
+        reason="needed",
+        install_command=("brew", "install", "ffmpeg"),
+    )
+
+    class InstallingDependencies:
+        def __init__(self) -> None:
+            self.checks = 0
+            self.installs = []
+
+        def check_for_request(self, _url, _settings):
+            self.checks += 1
+            return [status] if self.checks == 1 else []
+
+        def install(self, name, consent):
+            self.installs.append((name, consent))
+
+    dependencies = InstallingDependencies()
+    engine = FakeEngine()
+    request = DownloadRequest("1", "https://example.com/video", Settings())
+    result = QueueRunner(engine, dependencies).run(
+        [request],
+        lambda _event: None,
+        dependency_prompt=lambda _request, _missing: True,
+    )
+
+    assert result.items[0].state == JobState.COMPLETED
+    assert engine.urls == [request.url]
+    assert dependencies.installs == [(DependencyName.FFMPEG, True)]

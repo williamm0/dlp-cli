@@ -4,7 +4,7 @@ from pathlib import Path
 from dlp.config import SettingsRepository
 from dlp.dependencies import DependencyName, DependencyStatus
 from dlp.history import HistoryEntry, HistoryRepository, ProfileRepository
-from dlp.models import DownloadRequest, JobState, QueueItem, Settings
+from dlp.models import DownloadRequest, JobState, ProgressEvent, ProgressPhase, QueueItem, Settings
 from dlp.ui import DownloaderApp
 from dlp.ui.app import DependencyDialog
 
@@ -16,7 +16,7 @@ def test_tui_renders_download_queue_and_settings() -> None:
             assert app.query_one("#url-input")
             assert app.query_one("#queue-table")
             assert app.query_one("#save-settings")
-            await pilot.press("s")
+            await pilot.press("ctrl+s")
             assert app.query_one("#tabs").active == "settings-tab"
 
     asyncio.run(scenario())
@@ -84,7 +84,7 @@ def test_tui_saves_settings_and_preserves_multiline_queue_order(tmp_path: Path) 
                 "https://example.com/two",
             ]
 
-            await pilot.press("s")
+            await pilot.press("ctrl+s")
             app._save_settings()
             assert app.repository.path.exists()
             assert SettingsRepository(app.repository.path).load().quality_mode == "best"
@@ -122,5 +122,32 @@ def test_tui_exposes_profile_filter_and_history_surfaces(tmp_path: Path) -> None
             assert app.query_one("#queue-filter")
             assert app.query_one("#history-table")
             assert len(app.history_entries) == 2
+
+    asyncio.run(scenario())
+
+
+def test_tui_exposes_searchable_advanced_options_and_preserves_queue_cursor() -> None:
+    async def scenario() -> None:
+        app = DownloaderApp()
+        async with app.run_test():
+            assert app.query_one("#advanced-search")
+            assert app.query_one("#validate-extra-args")
+            first = DownloadRequest("one", "https://example.com/one", Settings())
+            second = DownloadRequest("two", "https://example.com/two", Settings())
+            app.items[first.job_id] = QueueItem(first)
+            app.items[second.job_id] = QueueItem(second)
+            app._refresh_queue()
+            table = app.query_one("#queue-table")
+            table.move_cursor(row=1)
+            app._handle_event(
+                ProgressEvent(
+                    second.job_id,
+                    ProgressPhase.DOWNLOADING,
+                    percent=25,
+                    message="Downloading",
+                    state=JobState.DOWNLOADING,
+                )
+            )
+            assert table.get_row_at(table.cursor_row)[0] == "https://example.com/two"
 
     asyncio.run(scenario())

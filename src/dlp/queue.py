@@ -77,7 +77,12 @@ class QueueRunner:
                         state=JobState.BLOCKED,
                     )
                 )
-                result = DownloadResult(request.job_id, JobState.BLOCKED, error=message)
+                result = DownloadResult(
+                    request.job_id,
+                    JobState.BLOCKED,
+                    error=message,
+                    missing_dependencies=tuple(status.name.value for status in missing),
+                )
                 results.append(result)
                 self._sink(request, result)
                 continue

@@ -23,6 +23,10 @@ _SENSITIVE_EXTRA_FLAGS = {
     "--add-header",
     "--add-headers",
     "--proxy",
+    "--cookies",
+    "--cookies-from-browser",
+    "--netrc",
+    "--netrc-location",
 }
 
 
@@ -63,9 +67,12 @@ class Settings:
     merge_output_format: str = "auto"
     output_directory: Path = field(default_factory=lambda: Path.home() / "Downloads" / "dlp")
     filename_template: str = "%(title)s [%(id)s].%(ext)s"
+    download_archive: Path | None = None
     overwrite: str = "skip"
     resume_partial_files: bool = True
     retries: int = 3
+    fragment_retries: int = 3
+    concurrent_fragments: int = 1
     playlist_mode: str = "all"
     subtitles: str = "off"
     subtitle_languages: list[str] = field(default_factory=list)
@@ -75,6 +82,9 @@ class Settings:
     embed_metadata: bool = False
     write_thumbnail: bool = False
     embed_thumbnail: bool = False
+    write_info_json: bool = False
+    write_description: bool = False
+    write_comments: bool = False
     cookies_from_browser: str | None = None
     cookies_file: Path | None = None
     proxy: str | None = None
@@ -98,6 +108,11 @@ class Settings:
     def to_mapping(self) -> dict[str, Any]:
         _validate_proxy(self.proxy)
         _validate_extra_args_for_storage(self.extra_args)
+        if self.external_downloader not in {None, "aria2c"}:
+            raise ValueError("external_downloader must be 'aria2c' or empty")
+        for key in ("audio_format", "merge_output_format"):
+            if not _is_safe_option_text(getattr(self, key)):
+                raise ValueError(f"{key} contains unsupported characters")
         result: dict[str, Any] = {}
         for key, value in self.__dict__.items():
             if value is None:
@@ -118,7 +133,13 @@ class Settings:
             if key in raw:
                 values[key] = raw[key]
 
-        for key in ("output_directory", "cookies_file", "ffmpeg_path", "ffprobe_path"):
+        for key in (
+            "output_directory",
+            "download_archive",
+            "cookies_file",
+            "ffmpeg_path",
+            "ffprobe_path",
+        ):
             if values[key] is not None:
                 values[key] = Path(str(values[key])).expanduser()
 
@@ -130,17 +151,29 @@ class Settings:
         values["extra_args"] = [str(item) for item in values["extra_args"]]
         _validate_proxy(values["proxy"])
         _validate_extra_args_for_storage(values["extra_args"])
-        values["retries"] = max(0, int(values["retries"]))
         if values["socket_timeout"] is not None:
-            values["socket_timeout"] = max(1, int(values["socket_timeout"]))
+            values["socket_timeout"] = _bounded_int(
+                values["socket_timeout"], "socket_timeout", minimum=1, maximum=86_400
+            )
         for key in (
             "audio_only",
             "resume_partial_files",
             "embed_metadata",
             "write_thumbnail",
             "embed_thumbnail",
+            "write_info_json",
+            "write_description",
+            "write_comments",
         ):
             values[key] = _strict_bool(values[key], key)
+
+        values["retries"] = _nonnegative_int(values["retries"], "retries")
+        values["fragment_retries"] = _nonnegative_int(
+            values["fragment_retries"], "fragment_retries"
+        )
+        values["concurrent_fragments"] = _bounded_int(
+            values["concurrent_fragments"], "concurrent_fragments", minimum=1, maximum=32
+        )
 
         if values["quality_mode"] not in {"best", "custom"}:
             raise ValueError("quality_mode must be 'best' or 'custom'")
@@ -152,6 +185,11 @@ class Settings:
             raise ValueError("subtitles must be 'off', 'manual', or 'auto'")
         if values["js_runtime"] not in {"auto", "deno"}:
             raise ValueError("js_runtime must be 'auto' or 'deno'")
+        if values["external_downloader"] not in {None, "aria2c"}:
+            raise ValueError("external_downloader must be 'aria2c' or empty")
+        for key in ("audio_format", "merge_output_format"):
+            if not _is_safe_option_text(values[key]):
+                raise ValueError(f"{key} contains unsupported characters")
 
         return cls(**values)
 
@@ -181,6 +219,31 @@ def _strict_bool(value: Any, field_name: str) -> bool:
     if not isinstance(value, bool):
         raise ValueError(f"{field_name} must be a boolean")
     return value
+
+
+def _nonnegative_int(value: Any, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be an integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be an integer") from exc
+    if parsed < 0:
+        raise ValueError(f"{field_name} must be zero or greater")
+    return parsed
+
+
+def _bounded_int(value: Any, field_name: str, *, minimum: int, maximum: int) -> int:
+    parsed = _nonnegative_int(value, field_name)
+    if parsed < minimum or parsed > maximum:
+        raise ValueError(f"{field_name} must be between {minimum} and {maximum}")
+    return parsed
+
+
+def _is_safe_option_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value) and not any(
+        character.isspace() or character in {"/", "\\", "\x00"} for character in value
+    )
 
 
 def _validate_extra_args_for_storage(args: list[str]) -> None:
@@ -236,6 +299,24 @@ class MediaInfo:
         }
 
 
+@dataclass(frozen=True)
+class FormatInfo:
+    """Display-safe summary of one format returned by yt-dlp."""
+
+    format_id: str
+    ext: str | None = None
+    resolution: str | None = None
+    fps: float | None = None
+    filesize: int | None = None
+    tbr: float | None = None
+    video_codec: str | None = None
+    audio_codec: str | None = None
+    note: str | None = None
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {key: value for key, value in self.__dict__.items() if value is not None}
+
+
 @dataclass
 class QueueItem:
     request: DownloadRequest
@@ -254,6 +335,7 @@ class DownloadResult:
     error: str | None = None
     diagnostics: tuple[str, ...] = ()
     title: str | None = None
+    missing_dependencies: tuple[str, ...] = ()
 
 
 @dataclass

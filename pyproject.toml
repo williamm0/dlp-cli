@@ -4,26 +4,26 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dlp"
-version = "0.2.0"
+version = "0.3.0"
 description = "A clean terminal UI and CLI for yt-dlp downloads"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "platformdirs>=4.2",
-  "textual>=0.50",
+  "textual>=8.2.0",
   "tomli-w>=1.0",
-  "yt-dlp[default]>=2025.1.1",
-  "yt-dlp-ejs>=0.3.0",
+  "yt-dlp[default]>=2026.7.4",
+  "yt-dlp-ejs>=0.8.0",
   "tomli>=2.0; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
 dev = [
   "mypy>=1.10",
-  "pyinstaller>=6.8",
+  "pyinstaller>=6.21.0",
   "pytest>=8.2",
   "pytest-cov>=5.0",
-  "ruff>=0.5",
+  "ruff>=0.16.1",
 ]
 
 [project.scripts]
