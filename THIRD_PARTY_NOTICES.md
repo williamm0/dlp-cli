@@ -11,4 +11,4 @@ DLP bundles or depends on these projects. The release process must include the l
 | tomli-w | MIT | https://github.com/hukkin/tomli-w |
 | PyInstaller | GPLv2 with the PyInstaller bootloader exception | https://github.com/pyinstaller/pyinstaller |
 
-The build environment should collect the exact installed license metadata before publishing an artifact. DLP does not bundle ffmpeg or Deno; users install those tools separately under the prompts described in the README.
+The build scripts run `packaging/collect_licenses.py` and include the resulting `licenses/MANIFEST.txt` and license files inside each frozen artifact. DLP does not bundle ffmpeg or Deno; users install those tools separately under the prompts described in the README.

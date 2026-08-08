@@ -17,6 +17,16 @@ def test_runtime_redaction_handles_header_style_secrets() -> None:
     assert "[redacted]" in message
 
 
+def test_runtime_redaction_handles_non_http_urls_and_terminal_controls() -> None:
+    message = sanitize_message(
+        "ftp://user:password@example.com/file\x1b]52;c;secret\x07"
+    )
+    assert "user" not in message
+    assert "password" not in message
+    assert "secret" not in message
+    assert "\x1b" not in message
+
+
 def test_settings_reject_wrong_boolean_and_proxy_types() -> None:
     with pytest.raises(ValueError, match="audio_only"):
         Settings.from_mapping({"audio_only": "false"})
@@ -42,6 +52,16 @@ def test_custom_split_format_requires_media_tools() -> None:
     assert DependencyName.FFPROBE in required
 
 
+def test_non_youtube_request_does_not_require_youtube_ejs() -> None:
+    required = required_dependencies("https://example.com/video", Settings(quality_mode="custom"))
+    assert DependencyName.YTDLP_EJS not in required
+
+
+def test_external_downloader_is_restricted_to_supported_binary() -> None:
+    with pytest.raises(ValueError, match="external_downloader"):
+        Settings.from_mapping({"external_downloader": "/tmp/custom"})
+
+
 class MetadataYoutubeDL:
     last_options = None
 
@@ -64,6 +84,18 @@ class MetadataYoutubeDL:
             "duration": 91,
             "extractor_key": "Example",
             "id": "abc123",
+            "formats": [
+                {
+                    "format_id": "137",
+                    "ext": "mp4",
+                    "resolution": "1080p",
+                    "fps": 30,
+                    "filesize": 1024,
+                    "vcodec": "avc1",
+                    "acodec": "none",
+                    "format_note": "1080p",
+                }
+            ],
         }
 
 
@@ -84,6 +116,15 @@ def test_engine_flat_playlist_uses_flat_extraction() -> None:
     assert MetadataYoutubeDL.last_options is not None
     assert MetadataYoutubeDL.last_options["extract_flat"] is True
     assert "noplaylist" not in MetadataYoutubeDL.last_options
+
+
+def test_engine_lists_display_safe_formats() -> None:
+    formats = DownloadEngine(MetadataYoutubeDL).list_formats("https://example.com/video")
+
+    assert len(formats) == 1
+    assert formats[0].format_id == "137"
+    assert formats[0].resolution == "1080p"
+    assert formats[0].filesize == 1024
 
 
 class PostProcessYoutubeDL:

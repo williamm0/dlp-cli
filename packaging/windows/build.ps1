@@ -20,8 +20,11 @@ $env:PYTHONPATH = (Join-Path $Root "src") + ";" + $ExistingPythonPath
 $Version = & $Python -c "from dlp import __version__; print(__version__)"
 
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $Root "build/dlp")
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $Root "build/licenses")
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $Root "dist/dlp")
 Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $Root "dist/dlp-windows-x64-setup.exe")
+
+& $Python packaging/collect_licenses.py (Join-Path $Root "build/licenses")
 
 & $Python -m PyInstaller `
     --clean `
@@ -32,6 +35,7 @@ Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $Root "dist/dlp-wind
     --paths src `
     --add-data "src/dlp/ui/styles.tcss;dlp/ui" `
     --add-data "THIRD_PARTY_NOTICES.md;." `
+    --add-data "build/licenses;licenses" `
     --collect-all textual `
     --collect-all yt_dlp `
     --collect-all yt_dlp_ejs `

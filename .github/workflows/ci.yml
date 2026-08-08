@@ -22,9 +22,9 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install project
@@ -43,9 +43,9 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install project
@@ -64,10 +64,32 @@ jobs:
           .\dist\dlp\dlp.exe --version
           .\dist\dlp\dlp.exe --help
           .\dist\dlp\dlp.exe doctor --ui-check
+          if (-not (Test-Path .\dist\dlp\_internal\licenses\MANIFEST.txt)) { throw "License manifest missing" }
+          python packaging/smoke_frozen.py .\dist\dlp\dlp.exe
+      - name: Install and smoke test Windows installer
+        shell: pwsh
+        run: |
+          $installDir = Join-Path $env:RUNNER_TEMP "dlp-installed"
+          $installer = (Resolve-Path .\dist\dlp-windows-x64-setup.exe).Path
+          & $installer /VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/DIR=$installDir"
+          & (Join-Path $installDir "dlp.exe") --version
+          python packaging/smoke_frozen.py (Join-Path $installDir "dlp.exe")
+          $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+          $normalizedInstall = $installDir.TrimEnd("\")
+          if (-not (($userPath -split ";") | Where-Object { $_.TrimEnd("\") -ieq $normalizedInstall })) {
+            throw "Installer did not add its directory to the current-user PATH"
+          }
+          $uninstaller = Get-ChildItem $installDir -Filter "unins*.exe" | Select-Object -First 1
+          & $uninstaller.FullName /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+          if (Test-Path $installDir) { throw "Installer directory remained after uninstall" }
+          $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+          if (($userPath -split ";") | Where-Object { $_.TrimEnd("\") -ieq $normalizedInstall }) {
+            throw "Uninstaller left its directory in the current-user PATH"
+          }
           $hash = (Get-FileHash .\dist\dlp-windows-x64-setup.exe -Algorithm SHA256).Hash.ToLower()
           "$hash  dlp-windows-x64-setup.exe" | Out-File .\dist\SHA256SUMS.txt -Encoding ascii
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dlp-windows-x64
           path: |
@@ -83,9 +105,9 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install project
@@ -96,9 +118,24 @@ jobs:
         run: |
           dist/dlp/dlp --version
           dist/dlp/dlp doctor --ui-check
+          test -s dist/dlp/_internal/licenses/MANIFEST.txt
+          python packaging/smoke_frozen.py dist/dlp/dlp
           shasum -a 256 dist/dlp-macos-arm64.pkg > dist/SHA256SUMS.txt
+      - name: Install and smoke test macOS package
+        run: |
+          set -euo pipefail
+          cleanup() {
+            sudo pkgutil --forget com.dlp.cli >/dev/null 2>&1 || true
+            sudo rm -f /usr/local/bin/dlp
+            sudo rm -rf /usr/local/libexec/dlp
+          }
+          trap cleanup EXIT
+          sudo installer -pkg dist/dlp-macos-arm64.pkg -target /
+          /usr/local/bin/dlp --version
+          test -s /usr/local/libexec/dlp/_internal/licenses/MANIFEST.txt
+          python packaging/smoke_frozen.py /usr/local/libexec/dlp/dlp
       - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dlp-macos-arm64
           path: |

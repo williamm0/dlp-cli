@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 import shlex
 from collections.abc import Sequence
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +62,25 @@ _FORBIDDEN_FLAGS = {
     "--no-plugin-dirs",
     "--downloader",
     "--downloader-args",
+    "--format",
+    "-f",
+    "--audio-format",
+    "--audio-quality",
+    "--merge-output-format",
+    "--retries",
+    "--fragment-retries",
+    "--concurrent-fragments",
+    "--playlist",
+    "--no-playlist",
+    "--cookies",
+    "--cookies-from-browser",
+    "--ffmpeg-location",
+    "--js-runtimes",
+    "--external-downloader",
+    "--ratelimit",
+    "--socket-timeout",
+    "--download-archive",
+    "--no-download-archive",
 }
 
 
@@ -113,12 +134,15 @@ def _base_options(settings: Settings, progress_hook: Any, logger: Any) -> dict[s
         "overwrites": settings.overwrite == "overwrite",
         "continuedl": settings.resume_partial_files,
         "retries": settings.retries,
+        "fragment_retries": settings.fragment_retries,
         "ignoreconfig": True,
         "quiet": True,
         "no_warnings": True,
         "logger": logger,
         "progress_hooks": [progress_hook],
     }
+    if settings.concurrent_fragments > 1:
+        options["concurrent_fragment_downloads"] = settings.concurrent_fragments
     if settings.playlist_mode == "single":
         options["noplaylist"] = True
     if settings.merge_output_format != "auto":
@@ -154,6 +178,14 @@ def _base_options(settings: Settings, progress_hook: Any, logger: Any) -> dict[s
         options["writethumbnail"] = True
     if settings.embed_thumbnail:
         options["embedthumbnail"] = True
+    if settings.download_archive:
+        options["download_archive"] = str(settings.download_archive.expanduser())
+    if settings.write_info_json:
+        options["writeinfojson"] = True
+    if settings.write_description:
+        options["writedescription"] = True
+    if settings.write_comments:
+        options["getcomments"] = True
     if settings.audio_only:
         options["format"] = f"{settings.audio_format}/bestaudio/best"
         options["postprocessors"] = [
@@ -173,7 +205,10 @@ def _parse_advanced_options(args: Sequence[str]) -> dict[str, Any]:
     try:
         import yt_dlp
 
-        _, _, urls, parsed_options = yt_dlp.parse_options(list(args))
+        # yt-dlp's parser is designed for a terminal and can print parse errors
+        # before raising. Keep the TUI/JSON renderer in control of output.
+        with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+            _, _, urls, parsed_options = yt_dlp.parse_options(list(args))
     except SystemExit as exc:
         raise OptionValidationError("yt-dlp rejected the advanced options") from exc
     except Exception as exc:
@@ -194,8 +229,44 @@ def compile_ydl_options(
     advanced = _parse_advanced_options(settings.extra_args)
     protected = {
         key: base[key]
-        for key in ("outtmpl", "ignoreconfig", "quiet", "no_warnings", "logger", "progress_hooks")
+        for key in (
+            "format",
+            "outtmpl",
+            "overwrites",
+            "continuedl",
+            "retries",
+            "fragment_retries",
+            "concurrent_fragment_downloads",
+            "ignoreconfig",
+            "quiet",
+            "no_warnings",
+            "logger",
+            "progress_hooks",
+            "noplaylist",
+            "merge_output_format",
+            "ratelimit",
+            "socket_timeout",
+            "external_downloader",
+            "proxy",
+            "cookiefile",
+            "cookiesfrombrowser",
+            "ffmpeg_location",
+            "js_runtimes",
+            "writesubtitles",
+            "writeautomaticsub",
+            "subtitleslangs",
+            "addmetadata",
+            "writethumbnail",
+            "embedthumbnail",
+            "postprocessors",
+            "download_archive",
+            "writeinfojson",
+            "writedescription",
+            "getcomments",
+        )
+        if key in base
     }
     result = {**base, **advanced}
-    result.update(protected)
+    for key, value in protected.items():
+        result[key] = value
     return result

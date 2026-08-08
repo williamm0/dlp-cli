@@ -54,3 +54,16 @@ def test_status_can_use_a_configured_ffmpeg_path(tmp_path: Path) -> None:
     )[0]
     assert status.available is True
     assert status.path == str(binary)
+
+
+def test_configured_tool_is_not_executed_during_preflight(tmp_path: Path) -> None:
+    marker = tmp_path / "executed"
+    binary = tmp_path / "ffmpeg"
+    binary.write_text(f"#!/bin/sh\ntouch '{marker}'\n", encoding="utf-8")
+    status = DependencyManager().check(
+        [DependencyName.FFMPEG],
+        Settings(ffmpeg_path=binary),
+    )[0]
+
+    assert status.available is True
+    assert not marker.exists()

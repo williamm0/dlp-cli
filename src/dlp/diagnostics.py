@@ -8,9 +8,17 @@ from urllib.parse import urlsplit, urlunsplit
 _SENSITIVE_ASSIGNMENT = re.compile(
     r"(?i)(cookie|authorization|password|passwd|token|secret|api[_-]?key)\s*[:=]\s*([^;\n]+)"
 )
+_URL = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s]+")
+_TERMINAL_ESCAPE = re.compile(
+    r"\x1b\](?:[^\x07\x1b]|\x1b(?!\\))*?(?:\x07|\x1b\\)|"
+    r"\x1b\[[0-?]*[ -/]*[@-~]"
+)
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\r\n\t]")
 
 
 def sanitize_url(value: str) -> str:
+    value = _TERMINAL_ESCAPE.sub("", value)
+    value = _CONTROL_CHARS.sub("", value)
     try:
         parts = urlsplit(value)
     except ValueError:
@@ -31,8 +39,10 @@ def sanitize_url(value: str) -> str:
 
 
 def sanitize_message(value: str) -> str:
-    redacted = _SENSITIVE_ASSIGNMENT.sub(r"\1=[redacted]", value)
-    return re.sub(r"https?://[^\s]+", lambda match: sanitize_url(match.group(0)), redacted)
+    safe = _TERMINAL_ESCAPE.sub(" ", str(value))
+    safe = _CONTROL_CHARS.sub(" ", safe)
+    redacted = _SENSITIVE_ASSIGNMENT.sub(r"\1=[redacted]", safe)
+    return _URL.sub(lambda match: sanitize_url(match.group(0)), redacted)
 
 
 def sanitize_exception(exc: BaseException) -> str:

@@ -69,6 +69,12 @@ TabPane {
     border: round $secondary;
 }
 
+#formats-status {
+    border: round $secondary;
+    max-height: 10;
+    overflow-y: auto;
+}
+
 #retry-button {
     margin-top: 1;
 }
@@ -89,9 +95,32 @@ TabPane {
     width: 1fr;
 }
 
+#settings-tab > VerticalScroll {
+    height: 1fr;
+}
+
+#settings-actions {
+    dock: bottom;
+    height: auto;
+    padding: 1 0 0 0;
+    background: $surface;
+}
+
 #extra-args {
     height: 8;
     border: tall $primary;
+}
+
+#advanced-help {
+    height: auto;
+    min-height: 3;
+    padding: 1;
+    border: round $secondary;
+    margin: 0 0 1 0;
+}
+
+#advanced-status {
+    margin-top: 0;
 }
 
 .button-row {
@@ -104,9 +133,11 @@ Button {
 }
 
 #dependency-dialog {
-    width: 70;
-    height: auto;
-    max-height: 80%;
+    width: 90%;
+    max-width: 70;
+    min-width: 30;
+    height: 80%;
+    max-height: 90%;
     padding: 2;
     border: round $primary;
     background: $panel;
@@ -117,6 +148,19 @@ DependencyDialog {
     background: $background;
 }
 
-#dependency-dialog .button-row {
+#dependency-dialog #dependency-actions {
     margin-top: 2;
+    height: auto;
+}
+
+#dependency-command-scroll {
+    height: 1fr;
+    min-height: 4;
+    border: round $secondary;
+    padding: 1;
+}
+
+#dependency-dialog #dependency-actions Button {
+    width: 100%;
+    margin: 0 0 1 0;
 }
