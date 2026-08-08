@@ -3,6 +3,7 @@ from pathlib import Path
 
 from dlp.config import SettingsRepository
 from dlp.dependencies import DependencyName, DependencyStatus
+from dlp.history import HistoryEntry, HistoryRepository, ProfileRepository
 from dlp.models import DownloadRequest, JobState, QueueItem, Settings
 from dlp.ui import DownloaderApp
 from dlp.ui.app import DependencyDialog
@@ -87,5 +88,39 @@ def test_tui_saves_settings_and_preserves_multiline_queue_order(tmp_path: Path) 
             app._save_settings()
             assert app.repository.path.exists()
             assert SettingsRepository(app.repository.path).load().quality_mode == "best"
+
+    asyncio.run(scenario())
+
+
+def test_tui_exposes_profile_filter_and_history_surfaces(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        app = DownloaderApp()
+        app.profile_repository = ProfileRepository(tmp_path / "profiles")
+        app.profile_repository.save("audio", Settings(audio_only=True))
+        app.history_repository = HistoryRepository(tmp_path / "history.jsonl")
+        app.history_repository.append(
+            HistoryEntry(
+                "retry-job",
+                "https://example.com/old",
+                JobState.COMPLETED,
+                "2026-08-08T00:00:00+00:00",
+                title="Old video",
+            )
+        )
+        app.history_repository.append(
+            HistoryEntry(
+                "retry-job",
+                "https://example.com/old",
+                JobState.FAILED,
+                "2026-08-08T00:01:00+00:00",
+                title="Old video",
+                error="retry me",
+            )
+        )
+        async with app.run_test():
+            assert app.query_one("#profile-select")
+            assert app.query_one("#queue-filter")
+            assert app.query_one("#history-table")
+            assert len(app.history_entries) == 2
 
     asyncio.run(scenario())

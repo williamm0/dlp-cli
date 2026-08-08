@@ -16,6 +16,8 @@ The build expects:
 - the project virtual environment at `.venv`
 - `pkgbuild` from Xcode Command Line Tools
 
+The script sets `PYTHONPATH` to `src`, so the version probe works from a clean checkout. Install the project dependencies first if the selected Python does not already have PyInstaller and the application dependencies.
+
 ## Windows x64
 
 ```powershell
@@ -29,5 +31,7 @@ The Windows installer adds the application directory to the current user PATH. I
 The Windows build expects an AMD64 Windows host, Python 3.10 or newer, and Inno Setup for the installer. If Inno Setup is absent, the script still produces the PyInstaller folder under `dist/dlp`.
 
 Both builds bundle Python, Textual, yt-dlp, and yt-dlp-ejs. They continue to check for external `ffmpeg`, `ffprobe`, and Deno at runtime and ask before installing them.
+
+Before release, smoke-test both `dlp --version` and `dlp doctor --ui-check`. The second command imports the Textual screen without opening a terminal session and catches missing frozen widget modules such as the v0.1 `_tab_pane` failure.
 
 `THIRD_PARTY_NOTICES.md` is copied into each PyInstaller bundle and therefore into both installer artifacts.

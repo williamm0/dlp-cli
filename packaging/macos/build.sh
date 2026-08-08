@@ -9,7 +9,14 @@ if [ "$(uname -m)" != "arm64" ]; then
     exit 1
 fi
 
-PYTHON=${PYTHON:-"$ROOT/.venv/bin/python"}
+if [ "${PYTHON:-}" ]; then
+    :
+elif [ -x "$ROOT/.venv/bin/python" ]; then
+    PYTHON="$ROOT/.venv/bin/python"
+else
+    PYTHON=$(command -v python3)
+fi
+export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 VERSION=$($PYTHON -c 'from dlp import __version__; print(__version__)')
 
 rm -rf build/dlp dist/dlp dist/dlp-macos-arm64.pkg
@@ -27,16 +34,58 @@ rm -rf build/dlp dist/dlp dist/dlp-macos-arm64.pkg
     --collect-all yt_dlp_ejs \
     packaging/entrypoint.py
 
+# pkgbuild preserves macOS extended attributes as AppleDouble (._*) files.
+# They are not part of the application and make the payload noisy, so strip
+# them before creating the installer. COPYFILE_DISABLE also prevents cp from
+# recreating them while staging the bundle.
+if command -v xattr >/dev/null 2>&1; then
+    xattr -rc dist/dlp
+fi
+
 STAGE=$(mktemp -d "${TMPDIR:-/tmp}/dlp-pkg.XXXXXX")
-trap 'rm -rf "$STAGE"' EXIT
+SANITIZE=""
+trap 'rm -rf "$STAGE" ${SANITIZE:+"$SANITIZE"}' EXIT
 mkdir -p "$STAGE/usr/local/libexec/dlp" "$STAGE/usr/local/bin"
-cp -R dist/dlp/. "$STAGE/usr/local/libexec/dlp/"
+COPYFILE_DISABLE=1 cp -R dist/dlp/. "$STAGE/usr/local/libexec/dlp/"
 ln -s ../libexec/dlp/dlp "$STAGE/usr/local/bin/dlp"
+if command -v xattr >/dev/null 2>&1; then
+    xattr -rc "$STAGE"
+fi
+find "$STAGE" -name '._*' -print -exec rm -rf {} +
 pkgbuild \
     --root "$STAGE" \
     --identifier com.dlp.cli \
     --version "$VERSION" \
     --install-location / \
-    "dist/dlp-macos-arm64.pkg"
+    "$ROOT/dist/dlp-macos-arm64.pkg"
+
+# Some macOS filesystems attach com.apple.provenance to every generated file.
+# pkgbuild serializes those attributes as AppleDouble (._*) entries inside the
+# payload. Repack only when they are present so the installer stays clean on
+# both local and CI builders.
+if pkgutil --payload-files "$ROOT/dist/dlp-macos-arm64.pkg" | grep -Eq '(^|/)\._[^/]*$'; then
+    SANITIZE=$(mktemp -d "${TMPDIR:-/tmp}/dlp-pkg-sanitize.XXXXXX")
+    xar -xf "$ROOT/dist/dlp-macos-arm64.pkg" -C "$SANITIZE"
+    mkdir "$SANITIZE/root"
+    gunzip -c "$SANITIZE/Payload" > "$SANITIZE/Payload.cpio"
+    (cd "$SANITIZE/root" && cpio -idm < "$SANITIZE/Payload.cpio")
+    find "$SANITIZE/root" -name '._*' -delete
+    mkbom "$SANITIZE/root" "$SANITIZE/Bom"
+    (
+        cd "$SANITIZE/root"
+        find . -print | cpio -o -H odc --owner 0:0 > "$SANITIZE/Payload.clean.cpio"
+    )
+    gzip -n -c "$SANITIZE/Payload.clean.cpio" > "$SANITIZE/Payload"
+    (
+        cd "$SANITIZE"
+        xar -c --compression=none --prop-exclude '.*' \
+            -f "$ROOT/dist/dlp-macos-arm64.pkg" Bom Payload PackageInfo
+    )
+fi
+
+if pkgutil --payload-files "$ROOT/dist/dlp-macos-arm64.pkg" | grep -Eq '(^|/)\._[^/]*$'; then
+    echo "macOS package still contains AppleDouble payload entries" >&2
+    exit 1
+fi
 
 echo "Created dist/dlp-macos-arm64.pkg"

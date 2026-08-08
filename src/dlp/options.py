@@ -46,9 +46,20 @@ _FORBIDDEN_FLAGS = {
     "--video-password",
     "--ap-password",
     "--add-header",
+    "--add-headers",
     "--proxy",
     "--ignore-config",
     "--no-config",
+    "--use-postprocessor",
+    "--postprocessor-args",
+    "--ppa",
+    "--plugin-dirs",
+    "--config-location",
+    "--config-locations",
+    "--no-config-locations",
+    "--no-plugin-dirs",
+    "--downloader",
+    "--downloader-args",
 }
 
 
@@ -126,6 +137,9 @@ def _base_options(settings: Settings, progress_hook: Any, logger: Any) -> dict[s
         options["cookiesfrombrowser"] = (settings.cookies_from_browser,)
     if settings.ffmpeg_path:
         options["ffmpeg_location"] = str(settings.ffmpeg_path.expanduser())
+    elif settings.ffprobe_path:
+        # yt-dlp accepts one ffmpeg location and discovers ffprobe beside it.
+        options["ffmpeg_location"] = str(settings.ffprobe_path.expanduser().parent)
     if settings.js_runtime != "auto":
         options["js_runtimes"] = {settings.js_runtime: {"path": None}}
     if settings.subtitles == "manual":

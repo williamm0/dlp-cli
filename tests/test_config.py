@@ -38,3 +38,14 @@ def test_invalid_config_is_reported(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match="quality_mode"):
         SettingsRepository(path).load()
+
+
+def test_invalid_config_can_be_recovered_without_data_loss(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text("quality_mode = \"unsupported\"\n", encoding="utf-8")
+
+    settings = SettingsRepository(path).load_or_default()
+
+    assert settings.quality_mode == "best"
+    assert not path.exists()
+    assert list(tmp_path.glob("config.toml.invalid-*"))

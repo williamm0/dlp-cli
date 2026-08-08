@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,18 @@ class SettingsRepository:
             return Settings.from_mapping(raw)
         except (OSError, TypeError, ValueError) as exc:
             raise ConfigError(f"Could not read settings from {self.path}: {exc}") from exc
+
+    def load_or_default(self) -> Settings:
+        """Recover a malformed user file without losing the original."""
+
+        try:
+            return self.load()
+        except ConfigError:
+            if self.path.exists():
+                suffix = datetime.now().strftime(f"%Y%m%d-%H%M%S-{os.getpid()}")
+                backup = self.path.with_name(f"{self.path.name}.invalid-{suffix}")
+                os.replace(self.path, backup)
+            return Settings(output_directory=default_output_directory())
 
     def save(self, settings: Settings) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

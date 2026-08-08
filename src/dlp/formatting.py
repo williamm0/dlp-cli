@@ -32,7 +32,9 @@ def format_eta(seconds: int | None) -> str:
 
 
 def format_percent(value: float | None) -> str:
-    return f"{value:5.1f}%" if value is not None else "  --.-%"
+    if value is None:
+        return "  --.-%"
+    return f"{max(0.0, min(100.0, value)):5.1f}%"
 
 
 def event_summary(event: Any) -> str:

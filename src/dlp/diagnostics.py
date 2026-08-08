@@ -6,7 +6,7 @@ import re
 from urllib.parse import urlsplit, urlunsplit
 
 _SENSITIVE_ASSIGNMENT = re.compile(
-    r"(?i)(cookie|authorization|password|passwd|token|secret|api[_-]?key)=([^\s&]+)"
+    r"(?i)(cookie|authorization|password|passwd|token|secret|api[_-]?key)\s*[:=]\s*([^;\n]+)"
 )
 
 

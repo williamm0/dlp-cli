@@ -21,6 +21,7 @@ _SENSITIVE_EXTRA_FLAGS = {
     "--video-password",
     "--ap-password",
     "--add-header",
+    "--add-headers",
     "--proxy",
 }
 
@@ -121,6 +122,10 @@ class Settings:
             if values[key] is not None:
                 values[key] = Path(str(values[key])).expanduser()
 
+        if not isinstance(values["subtitle_languages"], list):
+            raise ValueError("subtitle_languages must be a list")
+        if not isinstance(values["extra_args"], list):
+            raise ValueError("extra_args must be a list")
         values["subtitle_languages"] = [str(item) for item in values["subtitle_languages"]]
         values["extra_args"] = [str(item) for item in values["extra_args"]]
         _validate_proxy(values["proxy"])
@@ -128,11 +133,14 @@ class Settings:
         values["retries"] = max(0, int(values["retries"]))
         if values["socket_timeout"] is not None:
             values["socket_timeout"] = max(1, int(values["socket_timeout"]))
-        values["audio_only"] = bool(values["audio_only"])
-        values["resume_partial_files"] = bool(values["resume_partial_files"])
-        values["embed_metadata"] = bool(values["embed_metadata"])
-        values["write_thumbnail"] = bool(values["write_thumbnail"])
-        values["embed_thumbnail"] = bool(values["embed_thumbnail"])
+        for key in (
+            "audio_only",
+            "resume_partial_files",
+            "embed_metadata",
+            "write_thumbnail",
+            "embed_thumbnail",
+        ):
+            values[key] = _strict_bool(values[key], key)
 
         if values["quality_mode"] not in {"best", "custom"}:
             raise ValueError("quality_mode must be 'best' or 'custom'")
@@ -157,8 +165,22 @@ def _validate_proxy(value: Any) -> None:
         parts = urlsplit(value)
     except ValueError as exc:
         raise ValueError("proxy is not a valid URL") from exc
+    if parts.scheme.lower() not in {"http", "https", "socks4", "socks4a", "socks5", "socks5h"}:
+        raise ValueError("proxy must use http, https, socks4, or socks5")
+    if not parts.hostname:
+        raise ValueError("proxy must include a hostname")
+    try:
+        _ = parts.port
+    except ValueError as exc:
+        raise ValueError("proxy must include a valid port") from exc
     if parts.username or parts.password:
         raise ValueError("proxy credentials cannot be stored; use a credential-free proxy URL")
+
+
+def _strict_bool(value: Any, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a boolean")
+    return value
 
 
 def _validate_extra_args_for_storage(args: list[str]) -> None:
@@ -190,6 +212,30 @@ class ProgressEvent:
     state: JobState | None = None
 
 
+@dataclass(frozen=True)
+class MediaInfo:
+    """Small, display-safe metadata snapshot returned by an info request."""
+
+    url: str
+    title: str | None = None
+    uploader: str | None = None
+    channel: str | None = None
+    duration_seconds: int | None = None
+    webpage_url: str | None = None
+    thumbnail_url: str | None = None
+    extractor: str | None = None
+    video_id: str | None = None
+    is_playlist: bool = False
+    item_count: int | None = None
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in self.__dict__.items()
+            if value is not None
+        }
+
+
 @dataclass
 class QueueItem:
     request: DownloadRequest
@@ -207,6 +253,7 @@ class DownloadResult:
     output_path: str | None = None
     error: str | None = None
     diagnostics: tuple[str, ...] = ()
+    title: str | None = None
 
 
 @dataclass

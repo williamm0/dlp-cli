@@ -15,11 +15,13 @@ if ($env:PROCESSOR_ARCHITECTURE -ne "AMD64") {
     throw "This build targets Windows x64. Run it on an AMD64 Python environment."
 }
 
+$ExistingPythonPath = if ($env:PYTHONPATH) { $env:PYTHONPATH } else { "" }
+$env:PYTHONPATH = (Join-Path $Root "src") + ";" + $ExistingPythonPath
 $Version = & $Python -c "from dlp import __version__; print(__version__)"
 
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $Root "build/dlp")
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $Root "dist/dlp")
-Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $Root "dist/dlp-windows-x64.exe")
+Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $Root "dist/dlp-windows-x64-setup.exe")
 
 & $Python -m PyInstaller `
     --clean `
