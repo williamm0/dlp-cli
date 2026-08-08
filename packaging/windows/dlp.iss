@@ -31,6 +31,8 @@ Name: "{group}\DLP"; Filename: "{app}\dlp.exe"
 [Code]
 const
   DlpRegistryKey = 'Software\DLP';
+  DlpBroadcastWindow = $FFFF;
+  DlpSettingChangeMessage = $001A;
 
 function NormalizePath(const Value: string): string;
 begin
@@ -85,7 +87,7 @@ end;
 
 procedure BroadcastEnvironmentChange;
 begin
-  SendMessage(HWND_BROADCAST, WM_SETTINGCHANGE, 0, 'Environment');
+  SendMessage(DlpBroadcastWindow, DlpSettingChangeMessage, 0, 0);
 end;
 
 procedure UpdateUserPath(const AddEntry: Boolean);
