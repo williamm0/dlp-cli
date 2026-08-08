@@ -56,6 +56,19 @@ TabPane {
     border: round $primary;
 }
 
+#history-table {
+    height: 1fr;
+    border: round $primary;
+}
+
+#queue-filter {
+    margin: 0 0 1 0;
+}
+
+#preview-status {
+    border: round $secondary;
+}
+
 #retry-button {
     margin-top: 1;
 }

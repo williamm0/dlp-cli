@@ -12,7 +12,9 @@ from dlp.models import Settings
 def test_youtube_detection_covers_common_hosts() -> None:
     assert is_youtube_url("https://www.youtube.com/watch?v=1")
     assert is_youtube_url("https://youtu.be/1")
+    assert is_youtube_url("https://music.youtube.com/watch?v=1")
     assert not is_youtube_url("https://example.com/video")
+    assert not is_youtube_url("https://notyoutube.com/video")
 
 
 def test_best_youtube_request_requires_ffmpeg_and_deno() -> None:

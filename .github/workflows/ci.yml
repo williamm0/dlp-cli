@@ -63,6 +63,9 @@ jobs:
         run: |
           .\dist\dlp\dlp.exe --version
           .\dist\dlp\dlp.exe --help
+          .\dist\dlp\dlp.exe doctor --ui-check
+          $hash = (Get-FileHash .\dist\dlp-windows-x64-setup.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  dlp-windows-x64-setup.exe" | Out-File .\dist\SHA256SUMS.txt -Encoding ascii
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -70,4 +73,35 @@ jobs:
           path: |
             dist/dlp-windows-x64-setup.exe
             dist/dlp
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+  macos-package:
+    name: macOS arm64 package
+    runs-on: macos-14
+    needs: test
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install project
+        run: python -m pip install -e ".[dev]"
+      - name: Build macOS arm64 artifact
+        run: ./packaging/macos/build.sh
+      - name: Smoke test frozen app
+        run: |
+          dist/dlp/dlp --version
+          dist/dlp/dlp doctor --ui-check
+          shasum -a 256 dist/dlp-macos-arm64.pkg > dist/SHA256SUMS.txt
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dlp-macos-arm64
+          path: |
+            dist/dlp-macos-arm64.pkg
+            dist/SHA256SUMS.txt
           if-no-files-found: error

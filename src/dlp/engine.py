@@ -11,8 +11,10 @@ from .models import (
     DownloadRequest,
     DownloadResult,
     JobState,
+    MediaInfo,
     ProgressEvent,
     ProgressPhase,
+    Settings,
 )
 from .options import OptionValidationError, compile_ydl_options
 
@@ -61,7 +63,7 @@ class DownloadEngine:
 
             info = data.get("info") or {}
             current_title = info.get("title") or current_title
-            current_filename = data.get("filename") or current_filename
+            current_filename = _event_filename(data) or current_filename
             status = data.get("status")
             if status == "finished":
                 emit(
@@ -92,7 +94,11 @@ class DownloadEngine:
             total = _int_or_none(data.get("total_bytes")) or _int_or_none(
                 data.get("total_bytes_estimate")
             )
-            percent = (downloaded / total * 100) if downloaded is not None and total else None
+            percent = (
+                _clamp_percent(downloaded / total * 100)
+                if downloaded is not None and total
+                else None
+            )
             emit(
                 ProgressEvent(
                     job_id=request.job_id,
@@ -118,6 +124,8 @@ class DownloadEngine:
                 except ImportError:
                     raise RuntimeError("Canceled by user") from None
             status = data.get("status", "processing")
+            nonlocal current_filename
+            current_filename = _event_filename(data) or current_filename
             emit(
                 ProgressEvent(
                     job_id=request.job_id,
@@ -147,7 +155,9 @@ class DownloadEngine:
                 )
             )
             with ytdlp_factory(options) as ydl:
-                ydl.download([request.url])
+                result_code = ydl.download([request.url])
+                if result_code not in (None, 0):
+                    raise RuntimeError(f"yt-dlp exited with status {result_code}")
         except OptionValidationError as exc:
             message = sanitize_exception(exc)
             emit(_event(request, ProgressPhase.FAILED, message, JobState.FAILED))
@@ -156,6 +166,7 @@ class DownloadEngine:
                 JobState.FAILED,
                 error=message,
                 diagnostics=tuple(logger.messages),
+                title=current_title,
             )
         except BaseException as exc:
             if _is_canceled(exc, cancel_event):
@@ -166,6 +177,7 @@ class DownloadEngine:
                     JobState.CANCELED,
                     error=message,
                     diagnostics=tuple(logger.messages),
+                    title=current_title,
                 )
             message = sanitize_exception(exc)
             emit(_event(request, ProgressPhase.FAILED, message, JobState.FAILED))
@@ -174,6 +186,7 @@ class DownloadEngine:
                 JobState.FAILED,
                 error=message,
                 diagnostics=tuple(logger.messages),
+                title=current_title,
             )
 
         emit(
@@ -192,6 +205,56 @@ class DownloadEngine:
             JobState.COMPLETED,
             output_path=current_filename,
             diagnostics=tuple(logger.messages),
+            title=current_title,
+        )
+
+    def extract_info(
+        self,
+        url: str,
+        settings: Settings | None = None,
+        *,
+        flat_playlist: bool = False,
+    ) -> MediaInfo:
+        """Extract a small safe metadata snapshot without transferring media."""
+
+        from .diagnostics import sanitize_url
+
+        active_settings = settings or Settings()
+        logger = DiagnosticLogger()
+        try:
+            ytdlp_factory = self._ytdlp_factory
+            if ytdlp_factory is None:
+                import yt_dlp
+
+                ytdlp_factory = yt_dlp.YoutubeDL
+            options = compile_ydl_options(active_settings, lambda _data: None, logger)
+            options["skip_download"] = True
+            if flat_playlist:
+                options["extract_flat"] = True
+                options.pop("noplaylist", None)
+            with ytdlp_factory(options) as ydl:
+                raw = ydl.extract_info(url, download=False)
+        except BaseException as exc:
+            raise RuntimeError(sanitize_exception(exc)) from exc
+
+        if not isinstance(raw, dict):
+            raise RuntimeError("yt-dlp returned no metadata")
+        entries = raw.get("entries")
+        item_count = raw.get("playlist_count")
+        if item_count is None and isinstance(entries, (list, tuple)):
+            item_count = len(entries)
+        return MediaInfo(
+            url=sanitize_url(str(raw.get("webpage_url") or url)),
+            title=_safe_text(raw.get("title")),
+            uploader=_safe_text(raw.get("uploader")),
+            channel=_safe_text(raw.get("channel")),
+            duration_seconds=_int_or_none(raw.get("duration")),
+            webpage_url=sanitize_url(str(raw["webpage_url"])) if raw.get("webpage_url") else None,
+            thumbnail_url=sanitize_url(str(raw["thumbnail"])) if raw.get("thumbnail") else None,
+            extractor=_safe_text(raw.get("extractor_key") or raw.get("extractor")),
+            video_id=_safe_text(raw.get("id")),
+            is_playlist=bool(raw.get("_type") == "playlist" or entries is not None),
+            item_count=_int_or_none(item_count),
         )
 
 
@@ -221,6 +284,26 @@ def _float_or_none(value: Any) -> float | None:
         return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _clamp_percent(value: float) -> float:
+    return max(0.0, min(100.0, value))
+
+
+def _event_filename(data: dict[str, Any]) -> str | None:
+    info = data.get("info_dict") or data.get("info") or {}
+    values = (data.get("filepath"), data.get("filename"), info.get("_filename"))
+    for value in values:
+        if value:
+            return str(value)
+    return None
+
+
+def _safe_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = sanitize_message(str(value)).strip()
+    return text or None
 
 
 def _is_canceled(exc: BaseException, cancel_event: threading.Event) -> bool:

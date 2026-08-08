@@ -29,14 +29,17 @@ from textual.widgets import (
 )
 
 from ..batch import parse_batch_text
-from ..config import SettingsRepository, default_output_directory
+from ..config import ConfigError, SettingsRepository, default_output_directory
 from ..dependencies import DependencyManager, DependencyStatus
 from ..diagnostics import sanitize_message, sanitize_url
+from ..engine import DownloadEngine
 from ..formatting import event_summary, format_eta, format_percent, format_speed
+from ..history import HistoryEntry, HistoryRepository, ProfileRepository
 from ..models import (
     BatchResult,
     DownloadRequest,
     JobState,
+    MediaInfo,
     ProgressEvent,
     ProgressPhase,
     QueueItem,
@@ -101,6 +104,9 @@ class DownloaderApp(App[None]):
         Binding("ctrl+c", "cancel", "Cancel", show=True),
         Binding("r", "retry", "Retry", show=True),
         Binding("s", "focus_settings", "Settings", show=True),
+        Binding("h", "focus_history", "History", show=True),
+        Binding("d", "focus_download", "Download", show=True),
+        Binding("f", "focus_filter", "Filter queue", show=True),
         Binding("q", "quit", "Quit", show=True),
     ]
 
@@ -108,7 +114,12 @@ class DownloaderApp(App[None]):
         super().__init__()
         self.settings_only = settings_only
         self.repository = SettingsRepository()
-        self.settings = self.repository.load()
+        self.settings = self.repository.load_or_default()
+        self.profile_repository = ProfileRepository()
+        self.history_repository = HistoryRepository()
+        self.active_profile: str | None = None
+        self.queue_filter = ""
+        self.history_entries: list[HistoryEntry] = []
         self.dependency_manager = DependencyManager()
         self.queue_runner = QueueRunner(dependency_manager=self.dependency_manager)
         self.items: dict[str, QueueItem] = {}
@@ -123,6 +134,17 @@ class DownloaderApp(App[None]):
             with TabPane("Download", id="home-tab"):
                 yield Label("Paste one or more URLs", classes="section-title")
                 yield TextArea(id="url-input", language=None)
+                with Horizontal(classes="form-row"):
+                    yield Label("Profile", classes="form-label")
+                    yield Select(
+                        [
+                            ("Default settings", ""),
+                            *[(name, name) for name in self.profile_repository.names()],
+                        ],
+                        value="",
+                        id="profile-select",
+                        classes="form-control",
+                    )
                 yield Label(
                     self._home_summary(),
                     id="home-summary",
@@ -130,14 +152,32 @@ class DownloaderApp(App[None]):
                 )
                 with Horizontal(classes="button-row"):
                     yield Button("Add to queue", id="add-button", variant="primary")
+                    yield Button("Preview", id="preview-button")
                     yield Button("Cancel active job", id="cancel-button")
                 yield Static("Ready", id="home-status", classes="status")
+                yield Static(
+                    "Metadata preview appears here.", id="preview-status", classes="status"
+                )
 
             with TabPane("Queue", id="queue-tab"):
                 yield Label("Download queue", classes="section-title")
+                yield Input(
+                    placeholder="Filter by title, URL, or state",
+                    id="queue-filter",
+                )
                 yield DataTable(id="queue-table", cursor_type="row")
                 yield Button("Retry selected", id="retry-button")
                 yield Static("No jobs yet", id="queue-status", classes="status")
+
+            with TabPane("History", id="history-tab"):
+                yield Label("Recent downloads", classes="section-title")
+                yield DataTable(id="history-table", cursor_type="row")
+                yield Button("Clear history", id="clear-history")
+                yield Static(
+                    "History is stored locally and redacted.",
+                    id="history-status",
+                    classes="status",
+                )
 
             with TabPane("Settings", id="settings-tab"):
                 yield from self._settings_form()
@@ -358,12 +398,17 @@ class DownloaderApp(App[None]):
     def on_mount(self) -> None:
         table = self.query_one("#queue-table", DataTable)
         table.add_columns("Title", "State", "Progress", "Speed", "ETA", "Result")
+        history_table = self.query_one("#history-table", DataTable)
+        history_table.add_columns("Time", "State", "Title", "URL", "Result")
+        self._refresh_history()
         self._refresh_dependencies()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
         if button_id == "add-button":
             self._queue_from_input()
+        elif button_id == "preview-button":
+            self._preview_from_input()
         elif button_id == "cancel-button":
             self.action_cancel()
         elif button_id == "retry-button":
@@ -374,6 +419,71 @@ class DownloaderApp(App[None]):
             self._reset_settings()
         elif button_id == "refresh-dependencies":
             self._refresh_dependencies()
+        elif button_id == "clear-history":
+            self.history_repository.clear()
+            self.history_entries = []
+            self._refresh_history()
+            self.query_one("#history-status", Static).update("History cleared.")
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "queue-filter":
+            self.queue_filter = event.value.strip().lower()
+            self._refresh_queue()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "profile-select":
+            self._select_profile(str(event.value or ""))
+
+    def _select_profile(self, name: str) -> None:
+        try:
+            settings = (
+                self.repository.load_or_default()
+                if not name
+                else self.profile_repository.load(name)
+            )
+        except (ConfigError, OSError, ValueError) as exc:
+            self.query_one("#home-status", Static).update(
+                f"Profile error: {sanitize_message(str(exc))}"
+            )
+            return
+        self.active_profile = name or None
+        self.settings = settings
+        self._sync_settings_form()
+        self.query_one("#home-summary", Label).update(self._home_summary())
+        self.query_one("#home-status", Static).update(
+            f"Loaded {name or 'default'} settings for the next job."
+        )
+
+    def _preview_from_input(self) -> None:
+        urls = parse_batch_text(self.query_one("#url-input", TextArea).text)
+        if not urls:
+            self.query_one("#preview-status", Static).update("Paste a URL to preview.")
+            return
+        self.query_one("#preview-status", Static).update("Extracting metadata...")
+        self._preview_url(urls[0], self.settings.clone())
+
+    @work(thread=True, exclusive=True)
+    def _preview_url(self, url: str, settings: Settings) -> None:
+        try:
+            info = DownloadEngine().extract_info(url, settings)
+        except (RuntimeError, ValueError) as exc:
+            self.call_from_thread(
+                self._show_preview_error,
+                sanitize_message(str(exc)),
+            )
+            return
+        self.call_from_thread(self._show_preview, info)
+
+    def _show_preview(self, info: MediaInfo) -> None:
+        playlist = f" · {info.item_count or '?'} items" if info.is_playlist else ""
+        self.query_one("#preview-status", Static).update(
+            f"{info.title or 'Untitled'}\n"
+            f"{info.uploader or info.channel or 'Unknown creator'} · "
+            f"{_format_duration(info.duration_seconds)}{playlist}"
+        )
+
+    def _show_preview_error(self, message: str) -> None:
+        self.query_one("#preview-status", Static).update(f"Preview failed: {message}")
 
     def _queue_from_input(self) -> None:
         text = self.query_one("#url-input", TextArea).text
@@ -474,6 +584,16 @@ class DownloaderApp(App[None]):
 
     def _finish_download(self, result: BatchResult) -> None:
         self._run_active = False
+        for download_result in result.items:
+            queue_item = self.items.get(download_result.job_id)
+            if queue_item is not None:
+                self.history_repository.record(
+                    queue_item.request,
+                    download_result,
+                    profile=self.active_profile,
+                    retry_count=queue_item.retry_count,
+                )
+        self._refresh_history()
         if any(item.state == JobState.CANCELED for item in result.items):
             message = "Canceled active job."
         elif result.failed_count:
@@ -495,6 +615,11 @@ class DownloaderApp(App[None]):
             speed = format_speed(event.speed_bytes) if event and event.speed_bytes else "-"
             eta = format_eta(event.eta_seconds) if event and event.eta_seconds is not None else "-"
             result = sanitize_message(item.error or item.output_path or "-")
+            searchable = " ".join(
+                (title, item.request.url, item.state.value, result)
+            ).lower()
+            if self.queue_filter and self.queue_filter not in searchable:
+                continue
             table.add_row(
                 title[:48],
                 item.state.value,
@@ -505,68 +630,85 @@ class DownloaderApp(App[None]):
                 key=item.request.job_id,
             )
 
+    def _refresh_history(self) -> None:
+        self.history_entries = self.history_repository.load(limit=100)
+        table = self.query_one("#history-table", DataTable)
+        table.clear()
+        for index, entry in enumerate(self.history_entries):
+            table.add_row(
+                entry.timestamp.replace("T", " ").replace("+00:00", "Z"),
+                entry.state.value,
+                (entry.title or "-")[:36],
+                sanitize_url(entry.url)[:42],
+                (entry.error or entry.output_path or "-")[:42],
+                key=f"history-{index}",
+            )
+
     def _save_settings(self) -> None:
         try:
+            candidate = self.settings.clone()
             quality = str(self.query_one("#quality-select", Select).value)
             subtitles = str(self.query_one("#subtitles-select", Select).value)
             extra = split_extra_args(self.query_one("#extra-args", TextArea).text)
-            self.settings.quality_mode = quality
-            self.settings.subtitles = subtitles
-            self.settings.format_selector = self.query_one("#format-selector", Input).value.strip()
+            candidate.quality_mode = quality
+            candidate.subtitles = subtitles
+            candidate.format_selector = self.query_one("#format-selector", Input).value.strip()
             if quality == "best":
-                self.settings.format_selector = "bestvideo*+bestaudio/best"
-            elif not self.settings.format_selector:
+                candidate.format_selector = "bestvideo*+bestaudio/best"
+            elif not candidate.format_selector:
                 raise ValueError("custom format selector cannot be empty")
-            self.settings.merge_output_format = (
+            candidate.merge_output_format = (
                 self.query_one("#merge-output-format", Input).value.strip() or "auto"
             )
-            self.settings.output_directory = Path(
+            candidate.output_directory = Path(
                 self.query_one("#output-directory", Input).value
             ).expanduser()
             filename_template = self.query_one("#filename-template", Input).value.strip()
-            self.settings.filename_template = validate_filename_template(filename_template)
-            self.settings.resume_partial_files = self.query_one(
+            candidate.filename_template = validate_filename_template(filename_template)
+            candidate.resume_partial_files = self.query_one(
                 "#resume-partial-files", Checkbox
             ).value
-            self.settings.retries = max(0, int(self.query_one("#retries", Input).value.strip()))
-            self.settings.audio_only = self.query_one("#audio-only", Checkbox).value
-            self.settings.embed_metadata = self.query_one("#embed-metadata", Checkbox).value
-            self.settings.write_thumbnail = self.query_one("#write-thumbnail", Checkbox).value
-            self.settings.embed_thumbnail = self.query_one("#embed-thumbnail", Checkbox).value
-            self.settings.playlist_mode = str(self.query_one("#playlist-select", Select).value)
-            self.settings.overwrite = str(self.query_one("#overwrite-select", Select).value)
-            self.settings.subtitle_languages = [
+            candidate.retries = max(0, int(self.query_one("#retries", Input).value.strip()))
+            candidate.audio_only = self.query_one("#audio-only", Checkbox).value
+            candidate.embed_metadata = self.query_one("#embed-metadata", Checkbox).value
+            candidate.write_thumbnail = self.query_one("#write-thumbnail", Checkbox).value
+            candidate.embed_thumbnail = self.query_one("#embed-thumbnail", Checkbox).value
+            candidate.playlist_mode = str(self.query_one("#playlist-select", Select).value)
+            candidate.overwrite = str(self.query_one("#overwrite-select", Select).value)
+            candidate.subtitle_languages = [
                 item.strip()
                 for item in self.query_one("#subtitle-languages", Input).value.split(",")
                 if item.strip()
             ]
-            self.settings.audio_format = (
+            candidate.audio_format = (
                 self.query_one("#audio-format", Input).value.strip() or "best"
             )
-            self.settings.audio_quality = (
+            candidate.audio_quality = (
                 self.query_one("#audio-quality", Input).value.strip() or "5"
             )
-            self.settings.extra_args = extra
+            candidate.extra_args = extra
             browser = self.query_one("#cookies-browser", Input).value.strip()
             cookies = self.query_one("#cookies-file", Input).value.strip()
             proxy = self.query_one("#proxy", Input).value.strip()
-            self.settings.cookies_from_browser = browser or None
-            self.settings.cookies_file = Path(cookies).expanduser() if cookies else None
-            self.settings.proxy = proxy or None
+            candidate.cookies_from_browser = browser or None
+            candidate.cookies_file = Path(cookies).expanduser() if cookies else None
+            candidate.proxy = proxy or None
             rate_limit = self.query_one("#rate-limit", Input).value.strip()
             socket_timeout = self.query_one("#socket-timeout", Input).value.strip()
-            self.settings.rate_limit = rate_limit or None
-            self.settings.socket_timeout = max(1, int(socket_timeout)) if socket_timeout else None
+            candidate.rate_limit = rate_limit or None
+            candidate.socket_timeout = max(1, int(socket_timeout)) if socket_timeout else None
             external_downloader = self.query_one("#external-downloader", Select).value
-            self.settings.external_downloader = (
+            candidate.external_downloader = (
                 str(external_downloader) if external_downloader else None
             )
-            self.settings.js_runtime = str(self.query_one("#js-runtime", Select).value)
+            candidate.js_runtime = str(self.query_one("#js-runtime", Select).value)
             ffmpeg = self.query_one("#ffmpeg-path", Input).value.strip()
             ffprobe = self.query_one("#ffprobe-path", Input).value.strip()
-            self.settings.ffmpeg_path = Path(ffmpeg).expanduser() if ffmpeg else None
-            self.settings.ffprobe_path = Path(ffprobe).expanduser() if ffprobe else None
-            self.repository.save(self.settings)
+            candidate.ffmpeg_path = Path(ffmpeg).expanduser() if ffmpeg else None
+            candidate.ffprobe_path = Path(ffprobe).expanduser() if ffprobe else None
+            candidate = Settings.from_mapping(candidate.to_mapping())
+            self.repository.save(candidate)
+            self.settings = candidate
             self.query_one("#settings-status", Static).update(f"Saved to {self.repository.path}")
             self.query_one("#home-summary", Label).update(self._home_summary())
         except (ValueError, OSError) as exc:
@@ -688,3 +830,24 @@ class DownloaderApp(App[None]):
 
     def action_focus_settings(self) -> None:
         self.query_one("#tabs", TabbedContent).active = "settings-tab"
+
+    def action_focus_history(self) -> None:
+        self.query_one("#tabs", TabbedContent).active = "history-tab"
+
+    def action_focus_download(self) -> None:
+        self.query_one("#tabs", TabbedContent).active = "home-tab"
+        self.query_one("#url-input", TextArea).focus()
+
+    def action_focus_filter(self) -> None:
+        self.query_one("#tabs", TabbedContent).active = "queue-tab"
+        self.query_one("#queue-filter", Input).focus()
+
+
+def _format_duration(seconds: int | None) -> str:
+    if seconds is None:
+        return "unknown duration"
+    minutes, remaining = divmod(max(0, seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{remaining:02d}"
+    return f"{minutes:02d}:{remaining:02d}"

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from .models import InstallState, Settings
 
@@ -49,8 +50,14 @@ class InstallResult:
 
 
 def is_youtube_url(url: str) -> bool:
-    lowered = url.lower()
-    return any(host in lowered for host in ("youtube.com", "youtu.be", "youtube-nocookie.com"))
+    try:
+        hostname = (urlsplit(url).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return False
+    return any(
+        hostname == domain or hostname.endswith(f".{domain}")
+        for domain in ("youtube.com", "youtu.be", "youtube-nocookie.com")
+    )
 
 
 def required_dependencies(request_url: str, settings: Settings) -> set[DependencyName]:
@@ -59,13 +66,29 @@ def required_dependencies(request_url: str, settings: Settings) -> set[Dependenc
         DependencyName.YTDLP,
         DependencyName.YTDLP_EJS,
     }
-    if settings.quality_mode == "best" or settings.audio_only or settings.subtitles != "off":
+    if _needs_media_tools(settings):
         requirements.update({DependencyName.FFMPEG, DependencyName.FFPROBE})
     if is_youtube_url(request_url) and settings.js_runtime != "auto":
         requirements.add(DependencyName.DENO)
     if settings.external_downloader == "aria2c":
         requirements.add(DependencyName.ARIA2C)
     return requirements
+
+
+def _needs_media_tools(settings: Settings) -> bool:
+    """Determine whether the selected job can require ffmpeg/ffprobe."""
+
+    return any(
+        (
+            settings.quality_mode == "best",
+            settings.audio_only,
+            settings.subtitles != "off",
+            settings.merge_output_format != "auto",
+            "+" in settings.format_selector,
+            settings.embed_metadata,
+            settings.embed_thumbnail,
+        )
+    )
 
 
 class DependencyManager:
@@ -175,7 +198,7 @@ class DependencyManager:
                 return command, "brew install " + package
             if name in {DependencyName.YTDLP, DependencyName.YTDLP_EJS}:
                 command = (
-                    sys.executable,
+                    *_pip_executable(),
                     "-m",
                     "pip",
                     "install",
@@ -196,7 +219,7 @@ class DependencyManager:
                 return command, f"winget install --id {package} --exact"
             if name in {DependencyName.YTDLP, DependencyName.YTDLP_EJS}:
                 command = (
-                    sys.executable,
+                    *_pip_executable(),
                     "-m",
                     "pip",
                     "install",
@@ -225,6 +248,14 @@ def _configured_path(name: DependencyName, settings: Settings | None) -> Path | 
     if name == DependencyName.FFPROBE:
         return settings.ffprobe_path
     return None
+
+
+def _pip_executable() -> tuple[str, ...]:
+    """Use a real system Python when the frozen app cannot run ``-m pip``."""
+
+    if getattr(sys, "frozen", False):
+        return ("py",) if platform.system() == "Windows" else ("python3",)
+    return (sys.executable,)
 
 
 def _package_version(package: str) -> str | None:
