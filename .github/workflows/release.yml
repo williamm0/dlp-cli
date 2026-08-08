@@ -22,7 +22,7 @@ jobs:
       - run: |
           dist/dlp/dlp --version
           dist/dlp/dlp doctor --ui-check
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-macos
           path: dist/dlp-macos-arm64.pkg
@@ -45,7 +45,7 @@ jobs:
           .\packaging\windows\build.ps1
           .\dist\dlp\dlp.exe --version
           .\dist\dlp\dlp.exe doctor --ui-check
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-windows
           path: dist/dlp-windows-x64-setup.exe

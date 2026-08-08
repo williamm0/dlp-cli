@@ -67,7 +67,7 @@ jobs:
           $hash = (Get-FileHash .\dist\dlp-windows-x64-setup.exe -Algorithm SHA256).Hash.ToLower()
           "$hash  dlp-windows-x64-setup.exe" | Out-File .\dist\SHA256SUMS.txt -Encoding ascii
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dlp-windows-x64
           path: |
@@ -98,7 +98,7 @@ jobs:
           dist/dlp/dlp doctor --ui-check
           shasum -a 256 dist/dlp-macos-arm64.pkg > dist/SHA256SUMS.txt
       - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dlp-macos-arm64
           path: |
